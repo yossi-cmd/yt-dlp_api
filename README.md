@@ -39,8 +39,10 @@ npm start
 
 1. חבר את הריפו ל-Railway (או העלה את הקוד).
 2. Railway יזהה Node.js ויתקין dependencies מ-`package.json`.
-3. פקודת ההפעלה: `node server.js` (מוגדר ב-Procfile). `PORT` מוגדר אוטומטית.
+3. פקודת ההפעלה: `node server.js` (מוגדר ב-Procfile וב-`railway.toml`). `PORT` מוגדר אוטומטית.
 4. אופציונלי: הוסף `PROXY_URL` ו־`API_KEY` ב-Variables.
+
+**אם בלוגים מופיע "uvicorn: command not found":** הפרויקט עבר ל-Node.js; Railway אולי משתמש בפקודת הפעלה ישנה. ב-Dashboard → השירות → **Settings** → **Deploy** מצא **Start Command** והגדר ל-`node server.js` (או השאר ריק כדי שישתמש ב-Procfile). אחר כך **Redeploy**.
 
 ## Endpoints
 
