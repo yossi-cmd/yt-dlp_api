@@ -90,7 +90,7 @@ npm start
 האפליקציה לא הגיבה – בדרך כלל קריסה בהפעלה או חוסר תגובה בזמן. מה לבדוק:
 
 1. **לוגים ב-Railway:** ב-Dashboard → הפרויקט → Deployments → View Logs. חפש הודעות שגיאה (למשל בעיית טעינת `@distube/ytdl-core` או פורט).
-2. **גרסת Node:** הפרויקט מוגדר ל-Node 18 (`engines.node` ב-`package.json`). אם Railway מריץ גרסה אחרת, ייתכן שתקבל 502.
+2. **גרסת Node:** הפרויקט דורש Node 20 (`engines.node` ב-`package.json`, `.nvmrc`). Node 18 עלול לגרום ל־`File is not defined` (undici).
 3. **Health check:** אחרי פריסה נסה `GET https://your-app.railway.app/health` – אם אתה מקבל `ok`, השרת עלה והבעיה בבקשה אחרת.
 
 ### אם מתקבל "This video is not available"
