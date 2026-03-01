@@ -57,6 +57,15 @@ class DownloadListRequest(BaseModel):
     cookies_b64: Optional[str] = None
 
 
+def _apply_default_proxy(opts: dict) -> None:
+    """If PROXY_URL is set and no proxy in opts, use it as default."""
+    if "proxy" in opts:
+        return
+    url = os.environ.get("PROXY_URL", "").strip()
+    if url:
+        opts["proxy"] = url
+
+
 def _merge_opts(base: dict, extra: Optional[dict], out_dir: Path) -> dict:
     """Merge client options into base opts; forbid path-related keys."""
     out = {**base}
@@ -75,9 +84,9 @@ def _user_facing_error(msg: str) -> str:
     s = msg.strip()
     if "not available" in s.lower() or "private" in s.lower() or "unavailable" in s.lower():
         return (
-            f"{s} "
-            "For age/region-restricted or restricted videos, try: (1) redeploy to get the latest yt-dlp, "
-            "or (2) pass browser cookies: export from an extension (e.g. 'Get cookies.txt') and send as cookies_b64 (base64)."
+            "YouTube reports this video as not available from the server (often age/region restriction). "
+            "Use cookies from the browser where the video plays: install 'Get cookies.txt' (Chrome), "
+            "export cookies for youtube.com, base64-encode the file and send it in the request as cookies_b64."
         )
     return s
 
@@ -104,6 +113,8 @@ def download_video(
     opts = _merge_opts(base, extra_opts, out_dir)
     if cookie_path is not None:
         opts["cookiefile"] = str(cookie_path)
+    # Default proxy from env (e.g. PROXY_URL=http://user:pass@host:port)
+    _apply_default_proxy(opts)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -120,7 +131,7 @@ async def root():
     return {
         "service": "YouTube Download API",
         "docs": "/docs",
-        "auth": "When API_KEY env is set: send X-API-Key or Authorization: Bearer <key> on /download, /download-list, /formats",
+        "auth": "When API_KEY env is set: send X-API-Key or Authorization: Bearer <key>. Optional PROXY_URL env = default proxy for all requests.",
         "endpoints": {
             "download": "POST /download - body: { url, format?, options? } → file",
             "download-list": "POST /download-list - body: { urls, format?, options? } → zip",
@@ -133,6 +144,7 @@ async def root():
 async def list_formats(url: str, _: None = Depends(require_api_key)):
     """List available formats for a video URL."""
     opts = {"quiet": True, "no_warnings": True}
+    _apply_default_proxy(opts)
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
