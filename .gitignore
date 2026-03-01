@@ -3,3 +3,9 @@ node_modules/
 *.log
 .env.local
 .npm
+__pycache__/
+.venv/
+venv/
+*.pyc
+.pytest_cache/
+.mypy_cache/

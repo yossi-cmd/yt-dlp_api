@@ -1,10 +1,10 @@
 # YouTube + Spotify Download API
 
-תשתית API ב-**Node.js** (Express): הורדת סרטונים מ-YouTube (@distube/ytdl-core) והורדת שירים מ-Spotify (spottydl-better → YouTube Music). גישה עם API Key, פרוקסי אופציונלי, קבלת קובץ או ZIP.
+תשתית API ב-**Python** (FastAPI): הורדת סרטונים מ-YouTube (yt-dlp) והורדת שירים מ-Spotify (spotdl → YouTube). גישה עם API Key, פרוקסי אופציונלי, קבלת קובץ או ZIP.
 
 ## אימות (API Key)
 
-כשמוגדר משתנה סביבה `API_KEY` ב-Railway (או locally), יש לשלוח את המזהה בכל בקשה ל-`/download`, `/download-list` ו-`/formats`:
+כשמוגדר משתנה סביבה `API_KEY` ב-Railway (או locally), יש לשלוח את המזהה בכל בקשה ל-`/download`, `/download-list`, `/formats` ולאנדפוינטים של Spotify:
 
 - **Header:** `X-API-Key: <your-api-key>`
 - **או:** `Authorization: Bearer <your-api-key>`
@@ -13,24 +13,37 @@
 
 ### פרוקסי כברירת מחדל (PROXY_URL)
 
-אם מוגדר משתנה סביבה `PROXY_URL`, השרת ישתמש בו בכל הבקשות. מתאים ל־HTTP ו־SOCKS5:
+אם מוגדר משתנה סביבה `PROXY_URL`, השרת ישתמש בו בכל הבקשות ל-yt-dlp (YouTube):
 
 ```bash
 PROXY_URL=http://user:password@proxy-host:port
 # או
-PROXY_URL=socks5://user:password@brd.superproxy.io:33335
+PROXY_URL=socks5://user:password@host:port
 ```
+
+### Spotify (SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)
+
+כדי שהאנדפוינטים של Spotify יעבדו, יש להגדיר ב-Railway Variables:
+
+- `SPOTIFY_CLIENT_ID` – מפתח Client ID מ-[Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+- `SPOTIFY_CLIENT_SECRET` – Client Secret של האפליקציה
+
+בלי אלה, קריאות ל-`/spotify/*` יחזירו 503.
 
 ## התקנה מקומית
 
 ```bash
-npm install
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
+
+**FFmpeg** נדרש ל-spotdl (ולפורמט mp3 ב-yt-dlp). התקנה: `brew install ffmpeg` (macOS), `apt install ffmpeg` (Linux).
 
 ## הרצה
 
 ```bash
-npm start
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 השרת רץ על פורט 8000 (או משתנה `PORT`). לדוגמה: http://localhost:8000
@@ -38,11 +51,11 @@ npm start
 ## פריסה ב-Railway
 
 1. חבר את הריפו ל-Railway (או העלה את הקוד).
-2. Railway יזהה Node.js ויתקין dependencies מ-`package.json`.
-3. פקודת ההפעלה: `node server.js` (מוגדר ב-Procfile וב-`railway.toml`). `PORT` מוגדר אוטומטית.
-4. אופציונלי: הוסף `PROXY_URL` ו־`API_KEY` ב-Variables.
+2. Railway יזהה Python (requirements.txt) ויתקין dependencies; **FFmpeg** מותקן דרך `nixpacks.toml`.
+3. פקודת ההפעלה: `uvicorn main:app --host 0.0.0.0 --port $PORT` (מוגדר ב-Procfile וב-`railway.toml`).
+4. הוסף Variables: `API_KEY`, אופציונלי `PROXY_URL`, ולספוטיפיי: `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`.
 
-**אם בלוגים מופיע "uvicorn: command not found":** הפרויקט עבר ל-Node.js; Railway אולי משתמש בפקודת הפעלה ישנה. ב-Dashboard → השירות → **Settings** → **Deploy** מצא **Start Command** והגדר ל-`node server.js` (או השאר ריק כדי שישתמש ב-Procfile). אחר כך **Redeploy**.
+אם Railway בוחר ב-Node במקום Python (למשל בגלל `package.json`), ב-`nixpacks.toml` מוגדר `providers = ["python"]` כדי לאכוף Python.
 
 ## Endpoints
 
@@ -70,8 +83,8 @@ npm start
 
 - **url** – חובה. קישור לסרטון.
 - **format** – אופציונלי (ברירת מחדל: `best`). ערכים: `best`, `mp4`, `mp3` (אודיו בלבד).
-- **cookies** – אופציונלי. מערך של `[{ "name": "שם_עוגיה", "value": "ערך" }]` (למשל ייצוא מ-EditThisCookie).
-- **cookies_b64** – אופציונלי. קובץ cookies בפורמט Netscape (למשל מהרחבה "Get cookies.txt") מקודד ב-base64. עוזר לסרטונים עם הגבלת גיל או אימות.
+- **cookies** – אופציונלי. מערך של `[{ "name": "שם_עוגיה", "value": "ערך" }]`.
+- **cookies_b64** – אופציונלי. קובץ cookies בפורמט Netscape (למשל מהרחבה "Get cookies.txt") מקודד ב-base64.
 
 **תגובה:** הקובץ ישירות.
 
@@ -93,35 +106,20 @@ npm start
 
 ### Spotify
 
-השירות משתמש ב-**spottydl-better**: מפענח קישור Spotify, מוצא את השיר ב-YouTube Music ומוריד MP3 (כולל תגיות ואלבום). **נדרש FFmpeg** (ב-Railway מוגדר ב-`nixpacks.toml`).
+השירות משתמש ב-**spotdl**: מפענח קישור Spotify, מוצא את השיר ב-YouTube ומוריד MP3 (כולל מטא־דאטה). **נדרש FFmpeg** (ב-Railway מוגדר ב-`nixpacks.toml`) ומפתחות Spotify (ראו למעלה).
 
-- **GET /spotify/track?url=...** – מחזיר מטא־דאטה (title, artist, album, year, albumCoverURL). רק קישור **track**.
+- **GET /spotify/track?url=...** – מחזיר מטא־דאטה (name, artist, album וכו'). רק קישור **track**.
 - **POST /spotify/download** – Body: `{ "url": "https://open.spotify.com/track/..." }` → מחזיר קובץ MP3.
 - **POST /spotify/playlist** – Body: `{ "url": "https://open.spotify.com/playlist/..." }` או `.../album/...` → מחזיר קובץ ZIP עם כל השירים ב-MP3.
 
-אין צורך במפתחות Spotify או YouTube; הספרייה מטפלת בכך.
-
 ### אם מתקבל 502 "Application failed to respond"
 
-האפליקציה לא הגיבה – בדרך כלל קריסה בהפעלה או חוסר תגובה בזמן. מה לבדוק:
-
-1. **לוגים ב-Railway:** ב-Dashboard → הפרויקט → Deployments → View Logs. חפש הודעות שגיאה (למשל בעיית טעינת `@distube/ytdl-core` או פורט).
-2. **גרסת Node:** הפרויקט דורש Node 20 (`engines.node` ב-`package.json`, `.nvmrc`). Node 18 עלול לגרום ל־`File is not defined` (undici).
-3. **Health check:** אחרי פריסה נסה `GET https://your-app.railway.app/health` – אם אתה מקבל `ok`, השרת עלה והבעיה בבקשה אחרת.
-
-### אפשרויות בלי פרוקסי
-
-1. **Cookies מהדפדפן** – עוזר לסרטונים עם הגבלת גיל או "אימות שאתה לא בוט". לא פותר חסימה לפי IP (403 מדאטהסנטר).
-   - ייצוא: הרחבה [EditThisCookie](https://chrome.google.com/webstore/detail/editthiscookie) או "Get cookies.txt" → ייצוא מ-youtube.com.
-   - שליחה: בשדה `cookies` (מערך `[{ "name": "...", "value": "..." }]`) או `cookies_b64` (מחרוזת base64 של קובץ Netscape).
-2. **הרצה במקום עם IP "רגיל"** – להריץ את השרת על מחשב ביתי או שרת עם IP שלא מזוהה כדאטהסנטר (לא Railway/AWS וכו').
-3. **שימוש בשרת צד־שלישי** – שירותים שמספקים API להורדה מיוטיוב (מטפלים בפרוקסי/אימות אצלם).
-
-לחסימת 403 מ-IP של דאטהסנטר – הפתרון האמין הוא **פרוקסי residential** (`PROXY_URL`).
+1. **לוגים ב-Railway:** Dashboard → Deployments → View Logs. חפש שגיאות הפעלה (חסר FFmpeg, חסר SPOTIFY_CLIENT_ID וכו').
+2. **Health check:** נסה `GET https://your-app.railway.app/health` – אם מקבלים `ok`, השרת עלה.
 
 ### אם מתקבל "This video is not available" או 403
 
-יוטיוב חוסם גישה מ־IP של דאטהסנטר. **פתרון מומלץ:** `PROXY_URL` עם פרוקסי residential. ספקים: [Bright Data](https://brightdata.com), [SmartProxy](https://smartproxy.com), [Oxylabs](https://oxylabs.io). **אלטרנטיבה:** שליחת **cookies** (ראו למעלה) – עוזר להגדרת גיל, לא תמיד ל-403.
+יוטיוב חוסם גישה מ־IP של דאטהסנטר. **פתרון מומלץ:** `PROXY_URL` עם פרוקסי residential. **אלטרנטיבה:** שליחת **cookies** (ראו למעלה) – עוזר להגדרת גיל, לא תמיד ל-403.
 
 ### דוגמת קריאה
 

@@ -1,3 +1,5 @@
-# Keep auto-detected packages (Node) and add FFmpeg for Spotify (spottydl-better)
+# Force Python provider (yt-dlp, spotdl); add FFmpeg
+providers = ["python"]
+
 [phases.setup]
 nixPkgs = ["...", "ffmpeg"]
