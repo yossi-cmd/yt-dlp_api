@@ -2,6 +2,7 @@
 YouTube Download API - FastAPI server for downloading videos via yt-dlp.
 Deploy on Railway. Access with API key; pass all parameters in the request; get file back.
 """
+import base64
 import os
 import tempfile
 import zipfile
@@ -23,6 +24,7 @@ app = FastAPI(
 FORBIDDEN_OPTIONS = frozenset({
     "outtmpl", "paths", "output", "output_na_placeholder",
     "postprocessor_args", "external_downloader_args", "concurrent_fragment_downloads",
+    "cookiefile", "cookiesfrombrowser",
 })
 
 
@@ -45,12 +47,14 @@ class DownloadRequest(BaseModel):
     url: HttpUrl
     format: Optional[str] = "best"  # best, mp4, mp3, 137+140, etc.
     options: Optional[dict[str, Any]] = None  # extra yt-dlp options (outtmpl/paths ignored)
+    cookies_b64: Optional[str] = None  # base64 of Netscape cookies.txt (for age/region-restricted)
 
 
 class DownloadListRequest(BaseModel):
     urls: list[HttpUrl]
     format: Optional[str] = "best"
     options: Optional[dict[str, Any]] = None
+    cookies_b64: Optional[str] = None
 
 
 def _merge_opts(base: dict, extra: Optional[dict], out_dir: Path) -> dict:
@@ -66,11 +70,24 @@ def _merge_opts(base: dict, extra: Optional[dict], out_dir: Path) -> dict:
     return out
 
 
+def _user_facing_error(msg: str) -> str:
+    """Turn yt-dlp errors into clearer messages; suggest cookies for 'not available'."""
+    s = msg.strip()
+    if "not available" in s.lower() or "private" in s.lower() or "unavailable" in s.lower():
+        return (
+            f"{s} "
+            "For age/region-restricted or restricted videos, try: (1) redeploy to get the latest yt-dlp, "
+            "or (2) pass browser cookies: export from an extension (e.g. 'Get cookies.txt') and send as cookies_b64 (base64)."
+        )
+    return s
+
+
 def download_video(
     url: str,
     format_str: str,
     out_dir: Path,
     extra_opts: Optional[dict[str, Any]] = None,
+    cookie_path: Optional[Path] = None,
 ) -> Path:
     """Download a single video with yt-dlp. Returns path to the downloaded file."""
     base = {
@@ -85,6 +102,8 @@ def download_video(
         ]
         base["format"] = "bestaudio/best"
     opts = _merge_opts(base, extra_opts, out_dir)
+    if cookie_path is not None:
+        opts["cookiefile"] = str(cookie_path)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -141,6 +160,19 @@ def _cleanup_file(path: str) -> None:
     Path(path).unlink(missing_ok=True)
 
 
+def _cookie_file_from_b64(cookies_b64: Optional[str], tmpdir: Path) -> Optional[Path]:
+    """Decode cookies_b64 and write to a temp file; return path or None."""
+    if not cookies_b64:
+        return None
+    try:
+        raw = base64.b64decode(cookies_b64, validate=True).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    path = tmpdir / "cookies.txt"
+    path.write_text(raw)
+    return path
+
+
 @app.post("/download")
 async def download_single(
     request: DownloadRequest,
@@ -148,17 +180,18 @@ async def download_single(
     _: None = Depends(require_api_key),
 ):
     """
-    Download a single video. Pass url, format, and optional `options` (yt-dlp dict).
+    Download a single video. Pass url, format, optional `options`, optional `cookies_b64`.
     Returns the file directly.
     """
     url = str(request.url)
     format_str = request.format or "best"
     with tempfile.TemporaryDirectory() as tmpdir:
         out_dir = Path(tmpdir)
+        cookie_path = _cookie_file_from_b64(request.cookies_b64, out_dir)
         try:
-            path = download_video(url, format_str, out_dir, request.options)
+            path = download_video(url, format_str, out_dir, request.options, cookie_path)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=_user_facing_error(str(e)))
         persistent = tempfile.NamedTemporaryFile(delete=False, suffix=path.suffix)
         persistent.write(path.read_bytes())
         persistent.close()
@@ -187,14 +220,15 @@ async def download_list(
     format_str = request.format or "best"
     with tempfile.TemporaryDirectory() as tmpdir:
         out_dir = Path(tmpdir)
+        cookie_path = _cookie_file_from_b64(request.cookies_b64, out_dir)
         downloaded: list[Path] = []
         errors: list[str] = []
         for i, url in enumerate(request.urls):
             try:
-                path = download_video(str(url), format_str, out_dir, request.options)
+                path = download_video(str(url), format_str, out_dir, request.options, cookie_path)
                 downloaded.append(path)
             except Exception as e:
-                errors.append(f"URL {i + 1}: {e}")
+                errors.append(f"URL {i + 1}: {_user_facing_error(str(e))}")
         if not downloaded:
             raise HTTPException(
                 status_code=400,

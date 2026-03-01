@@ -64,9 +64,15 @@ API זמין ב-http://localhost:8000, תיעוד ב-http://localhost:8000/docs.
 
 - **url** – חובה. קישור לסרטון.
 - **format** – אופציונלי (ברירת מחדל: `best`). דוגמאות: `best`, `mp4`, `mp3`, `bestvideo+bestaudio`, `137+140`.
-- **options** – אופציונלי. מילון פרמטרים נוספים של yt-dlp (למשל `quality`, `postprocessor_args` וכו'). שדות כמו `outtmpl`/`paths` מתעלמים מהם מטעמי אבטחה.
+- **options** – אופציונלי. מילון פרמטרים נוספים של yt-dlp.
+- **cookies_b64** – אופציונלי. קובץ cookies בפורמט Netscape (למשל מ־[Get cookies.txt](https://chromewebstore.google.com/detail/get-cookiestxt/bgaddhkoddajcdgocldbbfleckgcbcid)) מקודד ב-base64. עוזר לסרטונים עם הגבלת גיל/אזור ("This video is not available").
 
 **תגובה:** הקובץ ישירות (גוף התגובה = הקובץ, עם `Content-Disposition` לשם הקובץ).
+
+### אם מתקבל "This video is not available"
+
+1. **עדכן את yt-dlp** – ב-Railway: דחוף קומיט חדש (או Redeploy) כדי להתקין גרסה עדכנית מ-`requirements.txt`.
+2. **השתמש ב-cookies** – יוטיוב לפעמים דורש התחברות לסרטונים עם הגבלת גיל. ייצא cookies מהדפדפן (הרחבה "Get cookies.txt" ליוטיוב), קודד ל-base64 והעבר ב-`cookies_b64`.
 
 ### POST /download-list
 
@@ -79,7 +85,8 @@ API זמין ב-http://localhost:8000, תיעוד ב-http://localhost:8000/docs.
     "https://www.youtube.com/watch?v=ID2"
   ],
   "format": "best",
-  "options": {}
+  "options": {},
+  "cookies_b64": null
 }
 ```
 
