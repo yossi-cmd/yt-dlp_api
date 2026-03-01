@@ -1,6 +1,6 @@
 # YouTube Download API
 
-תשתית API להורדת סרטונים מ-YouTube באמצעות **pytubefix**: גישה עם מזהה (API Key), פרוקסי אופציונלי מהסביבה, וקבלת הקובץ ישירות בתגובה. מתאים לפריסה ב-Railway.
+תשתית API להורדת סרטונים מ-YouTube ב-**Node.js** (Express + @distube/ytdl-core): גישה עם מזהה (API Key), פרוקסי אופציונלי מהסביבה, וקבלת הקובץ ישירות בתגובה. מתאים לפריסה ב-Railway.
 
 ## אימות (API Key)
 
@@ -13,51 +13,41 @@
 
 ### פרוקסי כברירת מחדל (PROXY_URL)
 
-אם מוגדר משתנה סביבה `PROXY_URL`, השרת ישתמש בו בכל הבקשות (כולל `/formats`). מתאים ל־HTTP ו־SOCKS5:
+אם מוגדר משתנה סביבה `PROXY_URL`, השרת ישתמש בו בכל הבקשות. מתאים ל־HTTP ו־SOCKS5:
 
 ```bash
-# HTTP
 PROXY_URL=http://user:password@proxy-host:port
-
-# SOCKS5 (למשל Bright Data – לפעמים עובד טוב יותר מ־HTTP)
+# או
 PROXY_URL=socks5://user:password@brd.superproxy.io:33335
 ```
-
-דוגמה עם Bright Data (ממיר מ־curl):
-- `PROXY_URL=http://brd-customer-XXX-zone-datacenter_proxy1:YYY@brd.superproxy.io:33335`
-- או SOCKS5 אם זמין: `PROXY_URL=socks5://...`
 
 ## התקנה מקומית
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+npm install
 ```
 
 ## הרצה
 
 ```bash
-python main.py
-# או
-uvicorn main:app --reload --port 8000
+npm start
 ```
 
-API זמין ב-http://localhost:8000, תיעוד ב-http://localhost:8000/docs.
+השרת רץ על פורט 8000 (או משתנה `PORT`). לדוגמה: http://localhost:8000
 
 ## פריסה ב-Railway
 
 1. חבר את הריפו ל-Railway (או העלה את הקוד).
-2. Railway יזהה Python ויתקין את ה-dependencies מ-`requirements.txt`.
-3. פקודת ההפעלה מוגדרת ב-`Procfile`: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
-4. אופציונלי: הוסף `PROXY_URL` (ו־`API_KEY`) ב-Variables.
+2. Railway יזהה Node.js ויתקין dependencies מ-`package.json`.
+3. פקודת ההפעלה: `node server.js` (מוגדר ב-Procfile). `PORT` מוגדר אוטומטית.
+4. אופציונלי: הוסף `PROXY_URL` ו־`API_KEY` ב-Variables.
 
 ## Endpoints
 
 | Method | Path | תיאור |
 |--------|------|--------|
 | GET | `/` | מידע על השירות (ללא אימות) |
-| GET | `/formats?url=...` | רשימת סטרימים/פורמטים זמינים לסרטון |
+| GET | `/formats?url=...` | רשימת פורמטים זמינים לסרטון |
 | POST | `/download` | הורדת סרטון בודד → **מחזיר קובץ** |
 | POST | `/download-list` | הורדת עד 20 סרטונים → **קובץ ZIP** |
 
@@ -73,11 +63,9 @@ API זמין ב-http://localhost:8000, תיעוד ב-http://localhost:8000/docs.
 ```
 
 - **url** – חובה. קישור לסרטון.
-- **format** – אופציונלי (ברירת מחדל: `best`). ערכים: `best` (הרזולוציה הגבוהה ביותר), `mp4`, `mp3` (אודיו בלבד – קובץ m4a/webm).
-- **options** – שמור לשימוש עתידי (לא בשימוש כרגע).
-- **cookies_b64** – לא בשימוש עם pytubefix (נשמר לתאימות API).
+- **format** – אופציונלי (ברירת מחדל: `best`). ערכים: `best`, `mp4`, `mp3` (אודיו בלבד).
 
-**תגובה:** הקובץ ישירות (גוף התגובה = הקובץ).
+**תגובה:** הקובץ ישירות.
 
 ### POST /download-list
 
@@ -97,7 +85,7 @@ API זמין ב-http://localhost:8000, תיעוד ב-http://localhost:8000/docs.
 
 ### אם מתקבל "This video is not available"
 
-יוטיוב עלול לחסום גישה מ־IP של דאטהסנטר (Railway, AWS וכו'). **פתרון:** להגדיר `PROXY_URL` עם פרוקסי **residential** (או SOCKS5 אם הספק תומך). ספקים מומלצים: [Bright Data](https://brightdata.com), [SmartProxy](https://smartproxy.com), [Oxylabs](https://oxylabs.io). עם פרוקסי HTTP ש־403, לנסות אותו כ־SOCKS5 אם הזמין.
+יוטיוב עלול לחסום גישה מ־IP של דאטהסנטר. **פתרון:** להגדיר `PROXY_URL` עם פרוקסי residential (או SOCKS5). ספקים: [Bright Data](https://brightdata.com), [SmartProxy](https://smartproxy.com), [Oxylabs](https://oxylabs.io).
 
 ### דוגמת קריאה
 

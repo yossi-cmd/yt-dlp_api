@@ -1,3 +1,0 @@
-# Install FFmpeg for audio extraction (e.g. format=mp3)
-[phases.setup]
-nixPkgs = ["ffmpeg"]
