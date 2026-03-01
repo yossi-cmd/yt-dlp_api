@@ -1,41 +1,41 @@
 """
-YouTube Download API - FastAPI server for downloading videos via yt-dlp.
-Deploy on Railway. Access with API key; pass all parameters in the request; get file back.
+YouTube Download API - FastAPI server for downloading videos via pytubefix.
+Deploy on Railway. Access with API key; pass params in request; get file back.
 """
-import base64
 import os
+import re
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-import yt_dlp
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Header
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl
+from pytubefix import YouTube
 
 app = FastAPI(
     title="YouTube Download API",
-    description="API for downloading YouTube videos. Authenticate with API key; pass params in body; receive file.",
-    version="1.0.0",
+    description="API for downloading YouTube videos (pytubefix). Authenticate with API key; pass params in body; receive file.",
+    version="2.0.0",
 )
 
-# Keys we never accept from the client (we control paths and safety)
-FORBIDDEN_OPTIONS = frozenset({
-    "outtmpl", "paths", "output", "output_na_placeholder",
-    "postprocessor_args", "external_downloader_args", "concurrent_fragment_downloads",
-    "cookiefile", "cookiesfrombrowser",
-})
+
+def _get_proxy_dict() -> Optional[dict[str, str]]:
+    """Build requests-style proxy dict from PROXY_URL env (http:// or socks5://)."""
+    url = os.environ.get("PROXY_URL", "").strip()
+    if not url:
+        return None
+    return {"http": url, "https": url}
 
 
-def require_api_key(
+def api_key_dep(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None),
 ) -> None:
-    """Validate API key from X-API-Key header or Authorization: Bearer <key>."""
     expected = os.environ.get("API_KEY")
     if not expected:
-        return  # no key configured = allow all (e.g. local dev)
+        return
     token = x_api_key
     if not token and authorization and authorization.startswith("Bearer "):
         token = authorization[7:].strip()
@@ -45,9 +45,9 @@ def require_api_key(
 
 class DownloadRequest(BaseModel):
     url: HttpUrl
-    format: Optional[str] = "best"  # best, mp4, mp3, 137+140, etc.
-    options: Optional[dict[str, Any]] = None  # extra yt-dlp options (outtmpl/paths ignored)
-    cookies_b64: Optional[str] = None  # base64 of Netscape cookies.txt (for age/region-restricted)
+    format: Optional[str] = "best"  # best, mp4, mp3 (audio)
+    options: Optional[dict[str, Any]] = None  # reserved
+    cookies_b64: Optional[str] = None  # not used with pytubefix; kept for API compatibility
 
 
 class DownloadListRequest(BaseModel):
@@ -57,36 +57,17 @@ class DownloadListRequest(BaseModel):
     cookies_b64: Optional[str] = None
 
 
-def _apply_default_proxy(opts: dict) -> None:
-    """If PROXY_URL is set and no proxy in opts, use it as default."""
-    if "proxy" in opts:
-        return
-    url = os.environ.get("PROXY_URL", "").strip()
-    if url:
-        opts["proxy"] = url
-
-
-def _merge_opts(base: dict, extra: Optional[dict], out_dir: Path) -> dict:
-    """Merge client options into base opts; forbid path-related keys."""
-    out = {**base}
-    if not extra:
-        return out
-    for k, v in extra.items():
-        if k in FORBIDDEN_OPTIONS:
-            continue
-        out[k] = v
-    out["outtmpl"] = str(out_dir / "%(title)s.%(ext)s")
-    return out
+def _sanitize_filename(name: str) -> str:
+    """Remove chars that are invalid in filenames."""
+    return re.sub(r'[<>:"/\\|?*]', "_", name).strip() or "video"
 
 
 def _user_facing_error(msg: str) -> str:
-    """Turn yt-dlp errors into clearer messages; suggest cookies for 'not available'."""
     s = msg.strip()
     if "not available" in s.lower() or "private" in s.lower() or "unavailable" in s.lower():
         return (
-            "YouTube reports this video as not available from the server (often age/region restriction). "
-            "Use cookies from the browser where the video plays: install 'Get cookies.txt' (Chrome), "
-            "export cookies for youtube.com, base64-encode the file and send it in the request as cookies_b64."
+            "YouTube reports this video as not available (e.g. age/region restriction). "
+            "Try using a different network or proxy (PROXY_URL)."
         )
     return s
 
@@ -95,113 +76,97 @@ def download_video(
     url: str,
     format_str: str,
     out_dir: Path,
-    extra_opts: Optional[dict[str, Any]] = None,
-    cookie_path: Optional[Path] = None,
 ) -> Path:
-    """Download a single video with yt-dlp. Returns path to the downloaded file."""
-    base = {
-        "format": format_str,
-        "outtmpl": str(out_dir / "%(title)s.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
-    }
-    if format_str.lower() in ("mp3", "m4a", "opus", "ogg", "wav"):
-        base["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": format_str.lower()}
-        ]
-        base["format"] = "bestaudio/best"
-    opts = _merge_opts(base, extra_opts, out_dir)
-    if cookie_path is not None:
-        opts["cookiefile"] = str(cookie_path)
-    # Default proxy from env (e.g. PROXY_URL=http://user:pass@host:port)
-    _apply_default_proxy(opts)
+    """Download a single video with pytubefix. Returns path to the downloaded file."""
+    proxies = _get_proxy_dict()
+    yt = YouTube(url, proxies=proxies)
+    yt.check_availability()
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if not info:
-            raise ValueError("Could not extract video info")
-        for f in out_dir.iterdir():
-            if f.is_file():
-                return f
-    raise ValueError("Download completed but no file found")
+    fmt = (format_str or "best").lower()
+    stream = None
+
+    if fmt == "mp3" or fmt == "audio":
+        streams = yt.streams.filter(only_audio=True).order_by("abr").desc()
+        stream = streams.first()
+    elif fmt == "mp4":
+        streams = yt.streams.filter(file_extension="mp4", progressive=True).order_by("resolution").desc()
+        stream = streams.first()
+        if not stream:
+            streams = yt.streams.filter(file_extension="mp4").order_by("resolution").desc()
+            stream = streams.first()
+    else:
+        # best: highest resolution (progressive when possible)
+        stream = yt.streams.get_highest_resolution()
+
+    if not stream:
+        raise ValueError("No stream found for the requested format")
+
+    safe_title = _sanitize_filename(yt.title)
+    vid = getattr(yt, "video_id", "") or ""
+    filename = f"{safe_title}_{vid}.{stream.subtype}" if vid else f"{safe_title}.{stream.subtype}"
+    path = stream.download(output_path=str(out_dir), filename=filename, skip_existing=False)
+    if path is None:
+        raise ValueError("Download returned no path")
+    return Path(path)
 
 
 @app.get("/")
 async def root():
     return {
-        "service": "YouTube Download API",
+        "service": "YouTube Download API (pytubefix)",
         "docs": "/docs",
-        "auth": "When API_KEY env is set: send X-API-Key or Authorization: Bearer <key>. Optional PROXY_URL env = default proxy for all requests.",
+        "auth": "When API_KEY env is set: send X-API-Key or Authorization: Bearer <key>. Optional PROXY_URL env = default proxy.",
         "endpoints": {
-            "download": "POST /download - body: { url, format?, options? } → file",
-            "download-list": "POST /download-list - body: { urls, format?, options? } → zip",
-            "formats": "GET /formats?url=... - list formats for a video",
+            "download": "POST /download - body: { url, format? } → file",
+            "download-list": "POST /download-list - body: { urls, format? } → zip",
+            "formats": "GET /formats?url=... - list formats",
         },
     }
 
 
 @app.get("/formats")
-async def list_formats(url: str, _: None = Depends(require_api_key)):
-    """List available formats for a video URL."""
-    opts = {"quiet": True, "no_warnings": True}
-    _apply_default_proxy(opts)
+async def list_formats(url: str, _: None = Depends(api_key_dep)):
+    """List available streams for a video URL."""
+    proxies = _get_proxy_dict()
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise HTTPException(status_code=400, detail="Invalid or unsupported URL")
-            formats = info.get("formats") or []
-            return {
-                "title": info.get("title"),
-                "formats": [
-                    {
-                        "format_id": f.get("format_id"),
-                        "ext": f.get("ext"),
-                        "resolution": f.get("resolution") or f.get("height"),
-                        "note": f.get("format_note"),
-                    }
-                    for f in formats
-                    if f.get("vcodec") != "none" or f.get("acodec") != "none"
-                ][:50],  # limit response size
-            }
+        yt = YouTube(url, proxies=proxies)
+        yt.check_availability()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=_user_facing_error(str(e)))
+    streams = list(yt.streams)
+    return {
+        "title": yt.title,
+        "formats": [
+            {
+                "itag": s.itag,
+                "mime_type": s.mime_type,
+                "resolution": s.resolution,
+                "abr": getattr(s, "abr", None),
+                "progressive": s.is_progressive,
+                "type": "audio" if getattr(s, "includes_audio_track", False) else "video",
+            }
+            for s in streams[:60]
+        ],
+    }
 
 
 def _cleanup_file(path: str) -> None:
     Path(path).unlink(missing_ok=True)
 
 
-def _cookie_file_from_b64(cookies_b64: Optional[str], tmpdir: Path) -> Optional[Path]:
-    """Decode cookies_b64 and write to a temp file; return path or None."""
-    if not cookies_b64:
-        return None
-    try:
-        raw = base64.b64decode(cookies_b64, validate=True).decode("utf-8", errors="replace")
-    except Exception:
-        return None
-    path = tmpdir / "cookies.txt"
-    path.write_text(raw)
-    return path
-
-
 @app.post("/download")
 async def download_single(
     request: DownloadRequest,
     background_tasks: BackgroundTasks,
-    _: None = Depends(require_api_key),
+    _: None = Depends(api_key_dep),
 ):
-    """
-    Download a single video. Pass url, format, optional `options`, optional `cookies_b64`.
-    Returns the file directly.
-    """
+    """Download a single video. Returns the file directly."""
     url = str(request.url)
     format_str = request.format or "best"
     with tempfile.TemporaryDirectory() as tmpdir:
         out_dir = Path(tmpdir)
-        cookie_path = _cookie_file_from_b64(request.cookies_b64, out_dir)
         try:
-            path = download_video(url, format_str, out_dir, request.options, cookie_path)
+            path = download_video(url, format_str, out_dir)
         except Exception as e:
             raise HTTPException(status_code=400, detail=_user_facing_error(str(e)))
         persistent = tempfile.NamedTemporaryFile(delete=False, suffix=path.suffix)
@@ -219,25 +184,19 @@ async def download_single(
 async def download_list(
     request: DownloadListRequest,
     background_tasks: BackgroundTasks,
-    _: None = Depends(require_api_key),
+    _: None = Depends(api_key_dep),
 ):
-    """
-    Download multiple videos. Pass urls, format, optional `options`. Returns a ZIP.
-    """
+    """Download multiple videos. Returns a ZIP file."""
     if not request.urls or len(request.urls) > 20:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide 1-20 URLs",
-        )
+        raise HTTPException(status_code=400, detail="Provide 1-20 URLs")
     format_str = request.format or "best"
     with tempfile.TemporaryDirectory() as tmpdir:
         out_dir = Path(tmpdir)
-        cookie_path = _cookie_file_from_b64(request.cookies_b64, out_dir)
         downloaded: list[Path] = []
         errors: list[str] = []
         for i, url in enumerate(request.urls):
             try:
-                path = download_video(str(url), format_str, out_dir, request.options, cookie_path)
+                path = download_video(str(url), format_str, out_dir)
                 downloaded.append(path)
             except Exception as e:
                 errors.append(f"URL {i + 1}: {_user_facing_error(str(e))}")
