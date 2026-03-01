@@ -83,6 +83,14 @@ npm start
 
 מחזיר קובץ ZIP עם כל הקבצים (עד 20 סרטונים).
 
+### אם מתקבל 502 "Application failed to respond"
+
+האפליקציה לא הגיבה – בדרך כלל קריסה בהפעלה או חוסר תגובה בזמן. מה לבדוק:
+
+1. **לוגים ב-Railway:** ב-Dashboard → הפרויקט → Deployments → View Logs. חפש הודעות שגיאה (למשל בעיית טעינת `@distube/ytdl-core` או פורט).
+2. **גרסת Node:** הפרויקט מוגדר ל-Node 18 (`engines.node` ב-`package.json`). אם Railway מריץ גרסה אחרת, ייתכן שתקבל 502.
+3. **Health check:** אחרי פריסה נסה `GET https://your-app.railway.app/health` – אם אתה מקבל `ok`, השרת עלה והבעיה בבקשה אחרת.
+
 ### אם מתקבל "This video is not available"
 
 יוטיוב עלול לחסום גישה מ־IP של דאטהסנטר. **פתרון:** להגדיר `PROXY_URL` עם פרוקסי residential (או SOCKS5). ספקים: [Bright Data](https://brightdata.com), [SmartProxy](https://smartproxy.com), [Oxylabs](https://oxylabs.io).

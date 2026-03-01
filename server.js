@@ -7,8 +7,15 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const ytdl = require("@distube/ytdl-core");
 const archiver = require("archiver");
+
+let ytdl;
+function getYtdl() {
+  if (!ytdl) {
+    ytdl = require("@distube/ytdl-core");
+  }
+  return ytdl;
+}
 
 const app = express();
 app.use(express.json());
@@ -20,7 +27,7 @@ const PROXY_URL = (process.env.PROXY_URL || "").trim();
 function getAgent() {
   if (!PROXY_URL) return undefined;
   try {
-    return ytdl.createProxyAgent({ uri: PROXY_URL });
+    return getYtdl().createProxyAgent({ uri: PROXY_URL });
   } catch {
     return undefined;
   }
@@ -64,8 +71,13 @@ app.get("/", (req, res) => {
       download: "POST /download - body: { url, format? } → file",
       "download-list": "POST /download-list - body: { urls, format? } → zip",
       formats: "GET /formats?url=... - list formats",
+      health: "GET /health - readiness check",
     },
   });
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
 });
 
 app.get("/formats", requireApiKey, async (req, res) => {
@@ -73,9 +85,16 @@ app.get("/formats", requireApiKey, async (req, res) => {
   if (!url) {
     return res.status(400).json({ detail: "Missing url query" });
   }
+  let lib;
+  try {
+    lib = getYtdl();
+  } catch (e) {
+    console.error("ytdl load error:", e);
+    return res.status(503).json({ detail: "YouTube library not available. Check server logs." });
+  }
   const agent = getAgent();
   try {
-    const info = await ytdl.getInfo(url, agent ? { agent } : {});
+    const info = await lib.getInfo(url, agent ? { agent } : {});
     const formats = (info.formats || []).slice(0, 60).map((f) => ({
       itag: f.itag,
       mimeType: f.mimeType,
@@ -104,13 +123,14 @@ function chooseFormatOptions(formatStr) {
 }
 
 async function downloadVideo(url, formatStr, outDir) {
+  const lib = getYtdl();
   const agent = getAgent();
   const opts = agent ? { agent } : {};
-  const info = await ytdl.getInfo(url, opts);
+  const info = await lib.getInfo(url, opts);
   const chooseOpts = chooseFormatOptions(formatStr);
   let format;
   try {
-    format = ytdl.chooseFormat(info.formats, chooseOpts);
+    format = lib.chooseFormat(info.formats, chooseOpts);
   } catch (e) {
     throw new Error("No stream found for the requested format");
   }
@@ -122,7 +142,7 @@ async function downloadVideo(url, formatStr, outDir) {
     ? `${safeTitle}_${videoId}.${ext}`
     : `${safeTitle}.${ext}`;
   const filepath = path.join(outDir, filename);
-  const stream = ytdl.downloadFromInfo(info, { ...opts, format });
+  const stream = lib.downloadFromInfo(info, { ...opts, format });
   const write = fs.createWriteStream(filepath);
   await new Promise((resolve, reject) => {
     stream.pipe(write);
@@ -134,6 +154,13 @@ async function downloadVideo(url, formatStr, outDir) {
 }
 
 app.post("/download", requireApiKey, async (req, res) => {
+  let lib;
+  try {
+    lib = getYtdl();
+  } catch (e) {
+    console.error("ytdl load error:", e);
+    return res.status(503).json({ detail: "YouTube library not available. Check server logs." });
+  }
   const { url, format: formatStr = "best" } = req.body || {};
   if (!url) {
     return res.status(400).json({ detail: "Missing url in body" });
@@ -158,6 +185,12 @@ app.post("/download", requireApiKey, async (req, res) => {
 });
 
 app.post("/download-list", requireApiKey, async (req, res) => {
+  try {
+    getYtdl();
+  } catch (e) {
+    console.error("ytdl load error:", e);
+    return res.status(503).json({ detail: "YouTube library not available. Check server logs." });
+  }
   const { urls, format: formatStr = "best" } = req.body || {};
   if (!Array.isArray(urls) || urls.length === 0 || urls.length > 20) {
     return res.status(400).json({ detail: "Provide 1-20 URLs" });
@@ -202,6 +235,10 @@ app.post("/download-list", requireApiKey, async (req, res) => {
   });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`YouTube Download API listening on port ${PORT}`);
+});
+server.on("error", (err) => {
+  console.error("Server listen error:", err);
+  process.exit(1);
 });
