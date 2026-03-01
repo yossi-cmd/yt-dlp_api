@@ -1,5 +1,5 @@
 /**
- * YouTube Download API - Node.js (Express + @distube/ytdl-core)
+ * YouTube + Spotify Download API - Node.js (Express, ytdl-core, spottydl-better)
  * Deploy on Railway. API key auth, PROXY_URL support, returns file or zip.
  */
 process.env.YTDL_NO_UPDATE = "1";
@@ -8,6 +8,12 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const archiver = require("archiver");
+
+let SpottyDL;
+function getSpottyDL() {
+  if (!SpottyDL) SpottyDL = require("spottydl-better");
+  return SpottyDL;
+}
 
 let ytdl;
 function getYtdl() {
@@ -24,13 +30,39 @@ const PORT = process.env.PORT || 8000;
 const API_KEY = process.env.API_KEY || "";
 const PROXY_URL = (process.env.PROXY_URL || "").trim();
 
-function getAgent() {
-  if (!PROXY_URL) return undefined;
-  try {
-    return getYtdl().createProxyAgent({ uri: PROXY_URL });
-  } catch {
-    return undefined;
+/** Parse cookies from body: cookies (array of {name, value}) or cookies_b64 (base64 Netscape format). */
+function parseCookies(body) {
+  if (!body) return null;
+  if (Array.isArray(body.cookies) && body.cookies.length > 0) {
+    const ok = body.cookies.every((c) => c && typeof c.name === "string" && typeof c.value === "string");
+    if (ok) return body.cookies;
   }
+  if (typeof body.cookies_b64 === "string" && body.cookies_b64.trim()) {
+    try {
+      const text = Buffer.from(body.cookies_b64.trim(), "base64").toString("utf8");
+      const out = [];
+      for (const line of text.split("\n")) {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) continue;
+        const parts = t.split("\t");
+        if (parts.length >= 7) out.push({ name: parts[5], value: parts[6] });
+      }
+      if (out.length) return out;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function getAgent(cookiesFromRequest = null) {
+  const lib = getYtdl();
+  const hasProxy = !!PROXY_URL;
+  const hasCookies = Array.isArray(cookiesFromRequest) && cookiesFromRequest.length > 0;
+  try {
+    if (hasProxy && hasCookies) return lib.createProxyAgent({ uri: PROXY_URL }, cookiesFromRequest);
+    if (hasProxy) return lib.createProxyAgent({ uri: PROXY_URL });
+    if (hasCookies) return lib.createAgent(cookiesFromRequest);
+  } catch (_) {}
+  return undefined;
 }
 
 function requireApiKey(req, res, next) {
@@ -48,10 +80,11 @@ function requireApiKey(req, res, next) {
 
 function userFacingError(msg) {
   const s = String(msg).trim();
-  if (
-    /not available|private|unavailable/i.test(s)
-  ) {
-    return "YouTube reports this video as not available (e.g. age/region restriction). Try PROXY_URL or different network.";
+  if (/not available|private|unavailable/i.test(s)) {
+    return "YouTube reports this video as not available (e.g. age/region restriction). Set PROXY_URL (residential proxy) and redeploy.";
+  }
+  if (/403|forbidden|status code: 403/i.test(s)) {
+    return "YouTube returned 403 Forbidden (often blocks datacenter IPs). Set PROXY_URL in Railway Variables to a residential proxy (e.g. Bright Data, SmartProxy) and redeploy.";
   }
   return s;
 }
@@ -62,15 +95,18 @@ function sanitizeFilename(name) {
 
 app.get("/", (req, res) => {
   res.json({
-    service: "YouTube Download API (Node.js)",
+    service: "YouTube + Spotify Download API (Node.js)",
     auth:
       API_KEY
         ? "Send X-API-Key or Authorization: Bearer <key>. Optional PROXY_URL = default proxy."
         : "No API_KEY set.",
     endpoints: {
-      download: "POST /download - body: { url, format? } → file",
-      "download-list": "POST /download-list - body: { urls, format? } → zip",
-      formats: "GET /formats?url=... - list formats",
+      download: "POST /download - body: { url, format?, cookies? | cookies_b64? } → file (YouTube)",
+      "download-list": "POST /download-list - body: { urls, format? } → zip (YouTube)",
+      formats: "GET /formats?url=... - list formats (YouTube)",
+      "spotify/track": "GET /spotify/track?url=... - track metadata (Spotify)",
+      "spotify/download": "POST /spotify/download - body: { url } → MP3 (Spotify track)",
+      "spotify/playlist": "POST /spotify/playlist - body: { url } → zip (Spotify playlist)",
       health: "GET /health - readiness check",
     },
   });
@@ -92,7 +128,7 @@ app.get("/formats", requireApiKey, async (req, res) => {
     console.error("ytdl load error:", e);
     return res.status(503).json({ detail: "YouTube library not available. Check server logs." });
   }
-  const agent = getAgent();
+  const agent = getAgent(parseCookies(req.body));
   try {
     const info = await lib.getInfo(url, agent ? { agent } : {});
     const formats = (info.formats || []).slice(0, 60).map((f) => ({
@@ -122,9 +158,9 @@ function chooseFormatOptions(formatStr) {
   return { quality: "highest", filter: "audioandvideo" };
 }
 
-async function downloadVideo(url, formatStr, outDir) {
+async function downloadVideo(url, formatStr, outDir, cookiesFromRequest = null) {
   const lib = getYtdl();
-  const agent = getAgent();
+  const agent = getAgent(cookiesFromRequest);
   const opts = agent ? { agent } : {};
   const info = await lib.getInfo(url, opts);
   const chooseOpts = chooseFormatOptions(formatStr);
@@ -165,10 +201,11 @@ app.post("/download", requireApiKey, async (req, res) => {
   if (!url) {
     return res.status(400).json({ detail: "Missing url in body" });
   }
+  const cookies = parseCookies(req.body);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "yt-"));
   let filepath;
   try {
-    filepath = await downloadVideo(url, formatStr, tmpDir);
+    filepath = await downloadVideo(url, formatStr, tmpDir, cookies);
   } catch (e) {
     try {
       fs.rmSync(tmpDir, { recursive: true });
@@ -195,12 +232,13 @@ app.post("/download-list", requireApiKey, async (req, res) => {
   if (!Array.isArray(urls) || urls.length === 0 || urls.length > 20) {
     return res.status(400).json({ detail: "Provide 1-20 URLs" });
   }
+  const cookies = parseCookies(req.body);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "yt-"));
   const downloaded = [];
   const errors = [];
   for (let i = 0; i < urls.length; i++) {
     try {
-      const filepath = await downloadVideo(urls[i], formatStr, tmpDir);
+      const filepath = await downloadVideo(urls[i], formatStr, tmpDir, cookies);
       downloaded.push(filepath);
     } catch (e) {
       errors.push(`URL ${i + 1}: ${userFacingError(e.message)}`);
@@ -235,8 +273,113 @@ app.post("/download-list", requireApiKey, async (req, res) => {
   });
 });
 
+// ---------- Spotify (spottydl-better: resolves via YouTube Music, needs FFmpeg) ----------
+
+function isSpotifyUrl(url) {
+  return /^https?:\/\/(open\.)?spotify\.com\/(track|album|playlist)\//i.test(String(url || "").trim());
+}
+
+app.get("/spotify/track", requireApiKey, async (req, res) => {
+  const url = req.query.url;
+  if (!url || !isSpotifyUrl(url)) {
+    return res.status(400).json({ detail: "Missing or invalid Spotify track/album/playlist URL" });
+  }
+  try {
+    const lib = getSpottyDL();
+    const trackUrl = url.replace(/\/album\/.*/, "").replace(/\/playlist\/.*/, "").trim();
+    if (!/\/track\//i.test(trackUrl)) {
+      return res.status(400).json({ detail: "Use a Spotify track URL for /spotify/track" });
+    }
+    const track = await lib.getTrack(trackUrl);
+    return res.json(track);
+  } catch (e) {
+    return res.status(400).json({ detail: String(e.message || e).trim() });
+  }
+});
+
+app.post("/spotify/download", requireApiKey, async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || !isSpotifyUrl(url) || !/\/track\//i.test(url)) {
+    return res.status(400).json({ detail: "Missing or invalid Spotify track URL" });
+  }
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "spot-"));
+  try {
+    const lib = getSpottyDL();
+    const track = await lib.getTrack(url);
+    const results = await lib.downloadTrack(track, tmpDir);
+    const success = results && results[0] && results[0].status === "Success" && results[0].filename;
+    if (!success || !fs.existsSync(results[0].filename)) {
+      try {
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch {}
+      return res.status(400).json({
+        detail: (results && results[0] && results[0].status) || "Download failed",
+      });
+    }
+    const filepath = results[0].filename;
+    const filename = path.basename(filepath);
+    res.download(filepath, filename, (err) => {
+      try {
+        fs.unlinkSync(filepath);
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch {}
+    });
+  } catch (e) {
+    try {
+      fs.rmSync(tmpDir, { recursive: true });
+    } catch {}
+    return res.status(400).json({ detail: String(e.message || e).trim() });
+  }
+});
+
+app.post("/spotify/playlist", requireApiKey, async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || !isSpotifyUrl(url)) {
+    return res.status(400).json({ detail: "Missing or invalid Spotify playlist/album URL" });
+  }
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "spot-"));
+  try {
+    const lib = getSpottyDL();
+    const isPlaylist = /\/playlist\//i.test(url);
+    const list = isPlaylist ? await lib.getPlaylist(url) : await lib.getAlbum(url);
+    const downloadMethod = isPlaylist ? lib.downloadPlaylist.bind(lib) : lib.downloadAlbum.bind(lib);
+    const results = await downloadMethod(list, tmpDir, false);
+    const files = (results || []).filter((r) => r.status === "Success" && r.filename && fs.existsSync(r.filename)).map((r) => r.filename);
+    if (files.length === 0) {
+      try {
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch {}
+      return res.status(400).json({
+        detail: "No tracks could be downloaded. " + ((results && results[0] && results[0].status) || "Check URL and try again."),
+      });
+    }
+    const zipPath = path.join(tmpDir, "spotify.zip");
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 9 } });
+    archive.pipe(output);
+    for (const fp of files) archive.file(fp, { name: path.basename(fp) });
+    await archive.finalize();
+    await new Promise((resolve, reject) => {
+      output.on("close", resolve);
+      archive.on("error", reject);
+    });
+    res.download(zipPath, "spotify.zip", (err) => {
+      try {
+        for (const fp of files) fs.unlinkSync(fp);
+        fs.unlinkSync(zipPath);
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch {}
+    });
+  } catch (e) {
+    try {
+      fs.rmSync(tmpDir, { recursive: true });
+    } catch {}
+    return res.status(400).json({ detail: String(e.message || e).trim() });
+  }
+});
+
 const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`YouTube Download API listening on port ${PORT}`);
+  console.log(`YouTube + Spotify Download API listening on port ${PORT}`);
 });
 server.on("error", (err) => {
   console.error("Server listen error:", err);

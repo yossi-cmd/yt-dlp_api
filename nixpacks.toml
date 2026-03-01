@@ -1,0 +1,3 @@
+# FFmpeg required for Spotify downloads (spottydl-better)
+[phases.setup]
+nixPkgs = ["ffmpeg"]

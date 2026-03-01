@@ -1,6 +1,6 @@
-# YouTube Download API
+# YouTube + Spotify Download API
 
-תשתית API להורדת סרטונים מ-YouTube ב-**Node.js** (Express + @distube/ytdl-core): גישה עם מזהה (API Key), פרוקסי אופציונלי מהסביבה, וקבלת הקובץ ישירות בתגובה. מתאים לפריסה ב-Railway.
+תשתית API ב-**Node.js** (Express): הורדת סרטונים מ-YouTube (@distube/ytdl-core) והורדת שירים מ-Spotify (spottydl-better → YouTube Music). גישה עם API Key, פרוקסי אופציונלי, קבלת קובץ או ZIP.
 
 ## אימות (API Key)
 
@@ -49,9 +49,13 @@ npm start
 | Method | Path | תיאור |
 |--------|------|--------|
 | GET | `/` | מידע על השירות (ללא אימות) |
-| GET | `/formats?url=...` | רשימת פורמטים זמינים לסרטון |
-| POST | `/download` | הורדת סרטון בודד → **מחזיר קובץ** |
-| POST | `/download-list` | הורדת עד 20 סרטונים → **קובץ ZIP** |
+| GET | `/formats?url=...` | רשימת פורמטים (YouTube) |
+| POST | `/download` | הורדת סרטון בודד (YouTube) → קובץ |
+| POST | `/download-list` | הורדת עד 20 סרטונים (YouTube) → ZIP |
+| GET | `/spotify/track?url=...` | מטא־דאטה של שיר (Spotify) |
+| POST | `/spotify/download` | הורדת שיר בודד (Spotify) → MP3 |
+| POST | `/spotify/playlist` | הורדת פלייליסט/אלבום (Spotify) → ZIP |
+| GET | `/health` | בדיקת תקינות |
 
 ### POST /download
 
@@ -66,6 +70,8 @@ npm start
 
 - **url** – חובה. קישור לסרטון.
 - **format** – אופציונלי (ברירת מחדל: `best`). ערכים: `best`, `mp4`, `mp3` (אודיו בלבד).
+- **cookies** – אופציונלי. מערך של `[{ "name": "שם_עוגיה", "value": "ערך" }]` (למשל ייצוא מ-EditThisCookie).
+- **cookies_b64** – אופציונלי. קובץ cookies בפורמט Netscape (למשל מהרחבה "Get cookies.txt") מקודד ב-base64. עוזר לסרטונים עם הגבלת גיל או אימות.
 
 **תגובה:** הקובץ ישירות.
 
@@ -85,6 +91,16 @@ npm start
 
 מחזיר קובץ ZIP עם כל הקבצים (עד 20 סרטונים).
 
+### Spotify
+
+השירות משתמש ב-**spottydl-better**: מפענח קישור Spotify, מוצא את השיר ב-YouTube Music ומוריד MP3 (כולל תגיות ואלבום). **נדרש FFmpeg** (ב-Railway מוגדר ב-`nixpacks.toml`).
+
+- **GET /spotify/track?url=...** – מחזיר מטא־דאטה (title, artist, album, year, albumCoverURL). רק קישור **track**.
+- **POST /spotify/download** – Body: `{ "url": "https://open.spotify.com/track/..." }` → מחזיר קובץ MP3.
+- **POST /spotify/playlist** – Body: `{ "url": "https://open.spotify.com/playlist/..." }` או `.../album/...` → מחזיר קובץ ZIP עם כל השירים ב-MP3.
+
+אין צורך במפתחות Spotify או YouTube; הספרייה מטפלת בכך.
+
 ### אם מתקבל 502 "Application failed to respond"
 
 האפליקציה לא הגיבה – בדרך כלל קריסה בהפעלה או חוסר תגובה בזמן. מה לבדוק:
@@ -93,9 +109,19 @@ npm start
 2. **גרסת Node:** הפרויקט דורש Node 20 (`engines.node` ב-`package.json`, `.nvmrc`). Node 18 עלול לגרום ל־`File is not defined` (undici).
 3. **Health check:** אחרי פריסה נסה `GET https://your-app.railway.app/health` – אם אתה מקבל `ok`, השרת עלה והבעיה בבקשה אחרת.
 
-### אם מתקבל "This video is not available"
+### אפשרויות בלי פרוקסי
 
-יוטיוב עלול לחסום גישה מ־IP של דאטהסנטר. **פתרון:** להגדיר `PROXY_URL` עם פרוקסי residential (או SOCKS5). ספקים: [Bright Data](https://brightdata.com), [SmartProxy](https://smartproxy.com), [Oxylabs](https://oxylabs.io).
+1. **Cookies מהדפדפן** – עוזר לסרטונים עם הגבלת גיל או "אימות שאתה לא בוט". לא פותר חסימה לפי IP (403 מדאטהסנטר).
+   - ייצוא: הרחבה [EditThisCookie](https://chrome.google.com/webstore/detail/editthiscookie) או "Get cookies.txt" → ייצוא מ-youtube.com.
+   - שליחה: בשדה `cookies` (מערך `[{ "name": "...", "value": "..." }]`) או `cookies_b64` (מחרוזת base64 של קובץ Netscape).
+2. **הרצה במקום עם IP "רגיל"** – להריץ את השרת על מחשב ביתי או שרת עם IP שלא מזוהה כדאטהסנטר (לא Railway/AWS וכו').
+3. **שימוש בשרת צד־שלישי** – שירותים שמספקים API להורדה מיוטיוב (מטפלים בפרוקסי/אימות אצלם).
+
+לחסימת 403 מ-IP של דאטהסנטר – הפתרון האמין הוא **פרוקסי residential** (`PROXY_URL`).
+
+### אם מתקבל "This video is not available" או 403
+
+יוטיוב חוסם גישה מ־IP של דאטהסנטר. **פתרון מומלץ:** `PROXY_URL` עם פרוקסי residential. ספקים: [Bright Data](https://brightdata.com), [SmartProxy](https://smartproxy.com), [Oxylabs](https://oxylabs.io). **אלטרנטיבה:** שליחת **cookies** (ראו למעלה) – עוזר להגדרת גיל, לא תמיד ל-403.
 
 ### דוגמת קריאה
 
